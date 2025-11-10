@@ -1,6 +1,6 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
+
 import 'mqtt_service.dart';
 
 void main() {
@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'MQTT Sensor App',
+      title: 'Plantformio MQTT',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
@@ -31,34 +31,57 @@ class MqttPage extends StatefulWidget {
 }
 
 class _MqttPageState extends State<MqttPage> {
-  late MqttService _mqttService;
-  final List<String> _messages = [];
+  final MqttService _mqttService = MqttService();
 
-  // stato locale della connessione
+  final TextEditingController _topicController =
+  TextEditingController(text: 'esp32/comandi');
+  final TextEditingController _messageController = TextEditingController();
+
   MqttConnectionState _connectionState = MqttConnectionState.disconnected;
-  String _debugStatus = 'Non ancora connesso';
+  final List<String> _receivedMessages = [];
 
-  // topic
-  static const String sensorTopic = 'esp32/sensori';
+  // Ultimi valori dei tre sensori
+  String? _lastTemperature;
+  String? _lastHumidity;
+  String? _lastChlorophyll;
 
   @override
   void initState() {
     super.initState();
 
-    _mqttService = MqttService(topic: sensorTopic);
-
-    // ascolta i cambiamenti di stato della connessione
+    // Ascolta lo stato della connessione
     _mqttService.connectionState.listen((state) {
       setState(() {
         _connectionState = state;
-        _debugStatus = 'Stato stream: $state';
       });
     });
 
-    // ascolta i messaggi ricevuti
+    // Ascolta i messaggi ricevuti generici (tutti i topic)
     _mqttService.messages.listen((msg) {
       setState(() {
-        _messages.insert(0, msg);
+        // Inserisco in cima alla lista
+        _receivedMessages.insert(0, msg);
+      });
+    });
+
+    // Ascolta il topic del sensore di temperatura
+    _mqttService.temperatureStream.listen((value) {
+      setState(() {
+        _lastTemperature = value;
+      });
+    });
+
+    // Ascolta il topic del sensore di umidità
+    _mqttService.humidityStream.listen((value) {
+      setState(() {
+        _lastHumidity = value;
+      });
+    });
+
+    // Ascolta il topic del sensore di clorofilla
+    _mqttService.chlorophyllStream.listen((value) {
+      setState(() {
+        _lastChlorophyll = value;
       });
     });
   }
@@ -66,78 +89,238 @@ class _MqttPageState extends State<MqttPage> {
   @override
   void dispose() {
     _mqttService.dispose();
+    _topicController.dispose();
+    _messageController.dispose();
     super.dispose();
   }
 
-  Future<void> _connect() async {
-    setState(() {
-      _debugStatus = 'Tentativo di connessione...';
-    });
-    await _mqttService.connect();
+  String _connectionStateText() {
+    switch (_connectionState) {
+      case MqttConnectionState.connected:
+        return 'Connesso';
+      case MqttConnectionState.connecting:
+        return 'Connessione in corso...';
+      case MqttConnectionState.disconnected:
+        return 'Disconnesso';
+      case MqttConnectionState.disconnecting:
+        return 'Disconnessione in corso...';
+      case MqttConnectionState.faulted:
+        return 'Errore di connessione';
+      default:
+        return _connectionState.toString();
+    }
+  }
 
-    // forziamo un refresh
-    setState(() {
-      _debugStatus += '\nDopo connect(): ${_connectionState.toString()}';
-    });
+  Future<void> _connect() async {
+    await _mqttService.connect();
+  }
+
+  void _disconnect() {
+    _mqttService.disconnect();
+  }
+
+  Future<void> _sendMessage() async {
+    final topic = _topicController.text.trim();
+    final message = _messageController.text.trim();
+
+    if (topic.isEmpty || message.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inserisci sia il topic che il messaggio.'),
+        ),
+      );
+      return;
+    }
+
+    await _mqttService.publish(topic, message);
+
+    // Pulisci il campo messaggio dopo l’invio
+    _messageController.clear();
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isConnected = _connectionState == MqttConnectionState.connected;
+    final isConnected = _connectionState == MqttConnectionState.connected;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MQTT Sensor Viewer'),
+        title: const Text('Plantformio MQTT'),
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ListTile(
-            title: const Text('Stato connessione'),
-            subtitle: Text(isConnected ? 'Connesso' : 'Disconnesso'),
-            trailing: ElevatedButton(
-              onPressed: isConnected ? null : _connect,
-              child: const Text('Connetti'),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            // ================== STATO CONNESSIONE ==================
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Stato: ',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      _connectionStateText(),
+                      style: TextStyle(
+                        color: isConnected ? Colors.green : Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    ElevatedButton(
+                      onPressed: _connect,
+                      child: const Text('Connetti'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: isConnected ? _disconnect : null,
+                      child: const Text('Disconnetti'),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Text(
-              'Debug: $_debugStatus',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(
-              'Topic sottoscritto:\n$sensorTopic',
-              textAlign: TextAlign.center,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _messages.isEmpty
-                ? const Center(
+            const SizedBox(height: 16),
+
+            // ================== SEZIONE SENSORI ==================
+            const Align(
+              alignment: Alignment.centerLeft,
               child: Text(
-                'Nessun messaggio ricevuto.\n'
-                    'Quando l’ESP32 pubblica sul topic, li vedrai qui.',
-                textAlign: TextAlign.center,
+                'Sensori',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
-            )
-                : ListView.builder(
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final msg = _messages[index];
-                return ListTile(
-                  leading: const Icon(Icons.sensors),
-                  title: Text(msg),
-                );
-              },
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+
+            Card(
+              child: ListTile(
+                title: const Text('Sensore Temperatura'),
+                subtitle: Text(
+                  _lastTemperature ?? 'Nessun dato',
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+            ),
+            Card(
+              child: ListTile(
+                title: const Text('Sensore Umidità'),
+                subtitle: Text(
+                  _lastHumidity ?? 'Nessun dato',
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+            ),
+            Card(
+              child: ListTile(
+                title: const Text('Sensore Clorofilla'),
+                subtitle: Text(
+                  _lastChlorophyll ?? 'Nessun dato',
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // ================== MESSAGGI RICEVUTI (TUTTI I TOPIC) ==================
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Messaggi ricevuti (tutti i topic)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade400),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: _receivedMessages.isEmpty
+                    ? const Center(
+                  child: Text(
+                    'Nessun messaggio ricevuto.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+                    : ListView.builder(
+                  reverse: false,
+                  itemCount: _receivedMessages.length,
+                  itemBuilder: (context, index) {
+                    final msg = _receivedMessages[index];
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        msg,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+
+            // ================== INVIA MESSAGGIO ==================
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Invia messaggio',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            TextField(
+              controller: _topicController,
+              decoration: const InputDecoration(
+                labelText: 'Topic',
+                hintText: 'es. esp32/comandi',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            TextField(
+              controller: _messageController,
+              decoration: const InputDecoration(
+                labelText: 'Messaggio',
+                hintText: 'Scrivi il messaggio da inviare...',
+                border: OutlineInputBorder(),
+              ),
+              minLines: 1,
+              maxLines: 3,
+            ),
+            const SizedBox(height: 8),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: isConnected ? _sendMessage : null,
+                child: const Text('Invia'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
+
