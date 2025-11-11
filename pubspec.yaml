@@ -32,6 +32,8 @@ dependencies:
     sdk: flutter
 
   mqtt_client: ^9.6.8
+  fl_chart: ^0.69.0
+  flutter_cube: ^0.1.0
 
 
   # The following adds the Cupertino Icons font to your application.

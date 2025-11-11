@@ -1,323 +1,512 @@
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
+import 'package:fl_chart/fl_chart.dart';
 
 import 'mqtt_service.dart';
 
+// Un'unica istanza di MqttService condivisa da tutta l'app
+final MqttService mqttService = MqttService();
+
 void main() {
-  runApp(const MyApp());
+  runApp(const PlantformioApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class PlantformioApp extends StatelessWidget {
+  const PlantformioApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Plantformio MQTT',
+      title: 'Plantformio',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
       ),
-      home: const MqttPage(),
+      home: const DashboardPage(),
     );
   }
 }
 
-class MqttPage extends StatefulWidget {
-  const MqttPage({super.key});
+// Modello per un punto di storico (tempo + valore)
+class SensorSample {
+  final DateTime time;
+  final double value;
 
-  @override
-  State<MqttPage> createState() => _MqttPageState();
+  SensorSample(this.time, this.value);
 }
 
-class _MqttPageState extends State<MqttPage> {
-  final MqttService _mqttService = MqttService();
+class DashboardPage extends StatefulWidget {
+  const DashboardPage({super.key});
 
-  final TextEditingController _topicController =
-  TextEditingController(text: 'esp32/comandi');
-  final TextEditingController _messageController = TextEditingController();
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
 
+class _DashboardPageState extends State<DashboardPage> {
   MqttConnectionState _connectionState = MqttConnectionState.disconnected;
-  final List<String> _receivedMessages = [];
 
-  // Ultimi valori dei tre sensori
   String? _lastTemperature;
   String? _lastHumidity;
   String? _lastChlorophyll;
+
+  final List<SensorSample> _temperatureHistory = [];
+  final List<SensorSample> _humidityHistory = [];
+  final List<SensorSample> _chlorophyllHistory = [];
 
   @override
   void initState() {
     super.initState();
 
-    // Ascolta lo stato della connessione
-    _mqttService.connectionState.listen((state) {
+    // Connessione automatica all'avvio
+    mqttService.connect();
+
+    // Stato connessione
+    mqttService.connectionState.listen((state) {
       setState(() {
         _connectionState = state;
       });
     });
 
-    // Ascolta i messaggi ricevuti generici (tutti i topic)
-    _mqttService.messages.listen((msg) {
-      setState(() {
-        // Inserisco in cima alla lista
-        _receivedMessages.insert(0, msg);
-      });
-    });
-
-    // Ascolta il topic del sensore di temperatura
-    _mqttService.temperatureStream.listen((value) {
+    // Dati sensori
+    mqttService.temperatureStream.listen((value) {
       setState(() {
         _lastTemperature = value;
+        _addSample(_temperatureHistory, value);
       });
     });
 
-    // Ascolta il topic del sensore di umidità
-    _mqttService.humidityStream.listen((value) {
+    mqttService.humidityStream.listen((value) {
       setState(() {
         _lastHumidity = value;
+        _addSample(_humidityHistory, value);
       });
     });
 
-    // Ascolta il topic del sensore di clorofilla
-    _mqttService.chlorophyllStream.listen((value) {
+    mqttService.chlorophyllStream.listen((value) {
       setState(() {
         _lastChlorophyll = value;
+        _addSample(_chlorophyllHistory, value);
       });
     });
   }
 
   @override
   void dispose() {
-    _mqttService.dispose();
-    _topicController.dispose();
-    _messageController.dispose();
+    // Non chiudo mqttService qui perché è condiviso dall'app.
     super.dispose();
   }
 
-  String _connectionStateText() {
+  /// Aggiunge un campione allo storico e rimuove quelli più vecchi di 24h
+  void _addSample(List<SensorSample> list, String rawValue) {
+    // Provo a estrarre un double dal testo (es. "32.5°C" -> 32.5)
+    final cleaned =
+    rawValue.replaceAll(RegExp('[^0-9,.-]'), '').replaceAll(',', '.');
+    final value = double.tryParse(cleaned);
+    if (value == null) return;
+
+    final now = DateTime.now();
+    list.add(SensorSample(now, value));
+
+    final cutoff = now.subtract(const Duration(hours: 24));
+    list.removeWhere((sample) => sample.time.isBefore(cutoff));
+  }
+
+  String get _connectionLabel {
     switch (_connectionState) {
       case MqttConnectionState.connected:
-        return 'Connesso';
+        return 'CONNECTED';
       case MqttConnectionState.connecting:
-        return 'Connessione in corso...';
+        return 'CONNECTING...';
       case MqttConnectionState.disconnected:
-        return 'Disconnesso';
+        return 'DISCONNECTED';
       case MqttConnectionState.disconnecting:
-        return 'Disconnessione in corso...';
+        return 'DISCONNECTING...';
       case MqttConnectionState.faulted:
-        return 'Errore di connessione';
+        return 'CONNECTION ERROR';
       default:
         return _connectionState.toString();
     }
   }
 
-  Future<void> _connect() async {
-    await _mqttService.connect();
-  }
-
-  void _disconnect() {
-    _mqttService.disconnect();
-  }
-
-  Future<void> _sendMessage() async {
-    final topic = _topicController.text.trim();
-    final message = _messageController.text.trim();
-
-    if (topic.isEmpty || message.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Inserisci sia il topic che il messaggio.'),
-        ),
-      );
-      return;
+  Color get _connectionColor {
+    switch (_connectionState) {
+      case MqttConnectionState.connected:
+        return Colors.green;
+      case MqttConnectionState.faulted:
+        return Colors.red;
+      default:
+        return Colors.orange;
     }
+  }
 
-    await _mqttService.publish(topic, message);
-
-    // Pulisci il campo messaggio dopo l’invio
-    _messageController.clear();
+  void _onMenuSelected(String value) {
+    switch (value) {
+      case 'profile':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ProfilePage()),
+        );
+        break;
+      case 'commands':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const CommandsPage()),
+        );
+        break;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isConnected = _connectionState == MqttConnectionState.connected;
+    final theme = Theme.of(context);
 
     return Scaffold(
+      // Per ora uno sfondo semplice; più avanti mettiamo l'immagine
+      backgroundColor: const Color(0xFF0b1f16),
       appBar: AppBar(
-        title: const Text('Plantformio MQTT'),
+        backgroundColor: const Color(0xFF09140e),
+        elevation: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'PLANTFORMIO',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
+            ),
+            Text(
+              _connectionLabel,
+              style: TextStyle(
+                fontSize: 12,
+                color: _connectionColor,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            onSelected: _onMenuSelected,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'profile',
+                child: Text('Profilo'),
+              ),
+              PopupMenuItem(
+                value: 'commands',
+                child: Text('Comandi'),
+              ),
+            ],
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // ================== STATO CONNESSIONE ==================
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    const Text(
-                      'Stato: ',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      _connectionStateText(),
-                      style: TextStyle(
-                        color: isConnected ? Colors.green : Colors.red,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    ElevatedButton(
-                      onPressed: _connect,
-                      child: const Text('Connetti'),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: isConnected ? _disconnect : null,
-                      child: const Text('Disconnetti'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // ================== SEZIONE SENSORI ==================
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Sensori',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            Card(
-              child: ListTile(
-                title: const Text('Sensore Temperatura'),
-                subtitle: Text(
-                  _lastTemperature ?? 'Nessun dato',
-                  style: const TextStyle(fontSize: 14),
-                ),
-              ),
-            ),
-            Card(
-              child: ListTile(
-                title: const Text('Sensore Umidità'),
-                subtitle: Text(
-                  _lastHumidity ?? 'Nessun dato',
-                  style: const TextStyle(fontSize: 14),
-                ),
-              ),
-            ),
-            Card(
-              child: ListTile(
-                title: const Text('Sensore Clorofilla'),
-                subtitle: Text(
-                  _lastChlorophyll ?? 'Nessun dato',
-                  style: const TextStyle(fontSize: 14),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // ================== MESSAGGI RICEVUTI (TUTTI I TOPIC) ==================
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Messaggi ricevuti (tutti i topic)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
+            // ================== CARD MODELLO 3D ==================
             Expanded(
+              flex: 4,
               child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade400),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: _receivedMessages.isEmpty
-                    ? const Center(
-                  child: Text(
-                    'Nessun messaggio ricevuto.',
-                    style: TextStyle(color: Colors.grey),
+                  color: Colors.black.withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.1),
                   ),
-                )
-                    : ListView.builder(
-                  reverse: false,
-                  itemCount: _receivedMessages.length,
-                  itemBuilder: (context, index) {
-                    final msg = _receivedMessages[index];
-                    return ListTile(
-                      dense: true,
-                      title: Text(
-                        msg,
-                        style: const TextStyle(fontSize: 14),
+                ),
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: _PlantModelPlaceholder(),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Nome pianta',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                        letterSpacing: 1.0,
                       ),
-                    );
-                  },
+                    ),
+                  ],
                 ),
               ),
             ),
 
             const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 8),
 
-            // ================== INVIA MESSAGGIO ==================
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Invia messaggio',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+            // ================== CARD SENSORI + GRAFICI ==================
+            Expanded(
+              flex: 5,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.1),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            TextField(
-              controller: _topicController,
-              decoration: const InputDecoration(
-                labelText: 'Topic',
-                hintText: 'es. esp32/comandi',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            TextField(
-              controller: _messageController,
-              decoration: const InputDecoration(
-                labelText: 'Messaggio',
-                hintText: 'Scrivi il messaggio da inviare...',
-                border: OutlineInputBorder(),
-              ),
-              minLines: 1,
-              maxLines: 3,
-            ),
-            const SizedBox(height: 8),
-
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: isConnected ? _sendMessage : null,
-                child: const Text('Invia'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SensorRow(
+                      label: 'TEMPERATURE',
+                      unit: '°C',
+                      currentValue: _lastTemperature,
+                      history: _temperatureHistory,
+                    ),
+                    const SizedBox(height: 8),
+                    SensorRow(
+                      label: 'HUMIDITY',
+                      unit: '%',
+                      currentValue: _lastHumidity,
+                      history: _humidityHistory,
+                    ),
+                    const SizedBox(height: 8),
+                    SensorRow(
+                      label: 'CHLOROPHYLL',
+                      unit: '%',
+                      currentValue: _lastChlorophyll,
+                      history: _chlorophyllHistory,
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// Placeholder per il modello 3D (per ora solo grafica)
+class _PlantModelPlaceholder extends StatefulWidget {
+  @override
+  State<_PlantModelPlaceholder> createState() => _PlantModelPlaceholderState();
+}
+
+class _PlantModelPlaceholderState extends State<_PlantModelPlaceholder>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // Rotazione lenta, giusto per dare l'idea
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 20),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (_, child) {
+        return Transform.rotate(
+          angle: _controller.value * 6.28318, // 2*pi
+          child: child,
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(32),
+          border: Border.all(color: Colors.greenAccent.withOpacity(0.4)),
+        ),
+        child: Center(
+          child: Icon(
+            Icons.eco,
+            size: 96,
+            color: Colors.greenAccent.withOpacity(0.9),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Riga singolo sensore: titolo + valore + mini grafico
+class SensorRow extends StatelessWidget {
+  final String label;
+  final String unit;
+  final String? currentValue;
+  final List<SensorSample> history;
+
+  const SensorRow({
+    super.key,
+    required this.label,
+    required this.unit,
+    required this.currentValue,
+    required this.history,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    String displayValue() {
+      if (currentValue == null) return '--';
+      final cleaned =
+      currentValue!.replaceAll(RegExp('[^0-9,.-]'), '').replaceAll(',', '.');
+      final value = double.tryParse(cleaned);
+      if (value == null) return currentValue!;
+      return '${value.toStringAsFixed(1)}$unit';
+    }
+
+    return SizedBox(
+      height: 90,
+      child: Row(
+        children: [
+          // Testo a sinistra
+          SizedBox(
+            width: 110,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: Colors.greenAccent,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  displayValue(),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Grafico a destra
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                color: Colors.black.withOpacity(0.25),
+                child: SensorChart(history: history),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Mini grafico linea con fl_chart
+class SensorChart extends StatelessWidget {
+  final List<SensorSample> history;
+
+  const SensorChart({super.key, required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    if (history.length < 2) {
+      return const Center(
+        child: Text(
+          'No data',
+          style: TextStyle(
+            color: Colors.white54,
+            fontSize: 10,
+          ),
+        ),
+      );
+    }
+
+    final spots = history.map((sample) {
+      final x = sample.time.millisecondsSinceEpoch.toDouble();
+      return FlSpot(x, sample.value);
+    }).toList();
+
+    final minX = spots.first.x;
+    final maxX = spots.last.x;
+
+    return LineChart(
+      LineChartData(
+        minX: minX,
+        maxX: maxX,
+        lineTouchData: const LineTouchData(enabled: false),
+        titlesData: const FlTitlesData(show: false),
+        gridData: const FlGridData(show: false),
+        borderData: FlBorderData(show: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            barWidth: 2,
+            isStrokeCapRound: true,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(show: false),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Pagina Profilo (per ora solo placeholder)
+class ProfilePage extends StatelessWidget {
+  const ProfilePage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Profilo'),
+      ),
+      body: const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Text(
+            'Qui in futuro potrai impostare il nome della pianta, '
+                'scegliere l\'immagine/modello 3D, e configurare altri dati.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Pagina Comandi (per ora solo placeholder)
+class CommandsPage extends StatelessWidget {
+  const CommandsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Comandi'),
+      ),
+      body: const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Text(
+            'Qui in futuro potremo aggiungere dei comandi preimpostati '
+                'da inviare automaticamente sul topic "esp32/comandi" '
+                'per comunicare con la pianta.',
+            textAlign: TextAlign.center,
+          ),
         ),
       ),
     );
