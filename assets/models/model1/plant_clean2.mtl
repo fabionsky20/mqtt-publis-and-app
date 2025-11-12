@@ -1,0 +1,32 @@
+# Blender MTL File: 'PlantZZ001_Blender_Cycles.blend'
+# Material Count: 2
+
+# Materiali pianta + vaso per Flutter
+
+newmtl PlantZZ001_3K          # FOGLIE
+Ns 100.000000
+Ka 1.000000 1.000000 1.000000
+Kd 1.000000 1.000000 1.000000  
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd PlantZZ001_COL_3K_METALNESS.jpg
+map_Bump PlantZZ001_NRM_3K_METALNESS.png
+
+
+newmtl PlantZZVase001_3K      # VASO
+Ns 80.000000
+Ka 1.000000 1.000000 1.000000
+Kd 1.000000 1.000000 1.000000   
+Ks 0.200000 0.200000 0.200000
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd PlantZZVase001_COL_3K_METALNESS.jpg
+map_Bump PlantZZVase001_NRM_3K_METALNESS.png
+
+
+
