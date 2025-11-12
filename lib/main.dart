@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_cube/flutter_cube.dart';
 
 import 'mqtt_service.dart';
 
@@ -18,9 +19,15 @@ class PlantformioApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Plantformio',
+      debugShowCheckedModeBanner: false, // niente targhetta rossa DEBUG
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFF0b1f16),
+        popupMenuTheme: const PopupMenuThemeData(
+          color: Color(0xFF10251a), // tendina verde scuro
+          textStyle: TextStyle(color: Colors.white),
+        ),
       ),
       home: const DashboardPage(),
     );
@@ -90,15 +97,8 @@ class _DashboardPageState extends State<DashboardPage> {
     });
   }
 
-  @override
-  void dispose() {
-    // Non chiudo mqttService qui perché è condiviso dall'app.
-    super.dispose();
-  }
-
   /// Aggiunge un campione allo storico e rimuove quelli più vecchi di 24h
   void _addSample(List<SensorSample> list, String rawValue) {
-    // Provo a estrarre un double dal testo (es. "32.5°C" -> 32.5)
     final cleaned =
     rawValue.replaceAll(RegExp('[^0-9,.-]'), '').replaceAll(',', '.');
     final value = double.tryParse(cleaned);
@@ -159,7 +159,6 @@ class _DashboardPageState extends State<DashboardPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      // Per ora uno sfondo semplice; più avanti mettiamo l'immagine
       backgroundColor: const Color(0xFF0b1f16),
       appBar: AppBar(
         backgroundColor: const Color(0xFF09140e),
@@ -186,7 +185,7 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
         actions: [
           PopupMenuButton<String>(
-            icon: const Icon(Icons.menu),
+            icon: const Icon(Icons.menu, color: Colors.white),
             onSelected: _onMenuSelected,
             itemBuilder: (context) => const [
               PopupMenuItem(
@@ -220,8 +219,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 child: Column(
                   children: [
-                    Expanded(
-                      child: _PlantModelPlaceholder(),
+                    const Expanded(
+                      child: PlantModel3D(),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -285,61 +284,94 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-// Placeholder per il modello 3D (per ora solo grafica)
-class _PlantModelPlaceholder extends StatefulWidget {
+//
+// 3D MODEL WIDGET
+//
+class PlantModel3D extends StatefulWidget {
+  const PlantModel3D({super.key});
+
   @override
-  State<_PlantModelPlaceholder> createState() => _PlantModelPlaceholderState();
+  State<PlantModel3D> createState() => _PlantModel3DState();
 }
 
-class _PlantModelPlaceholderState extends State<_PlantModelPlaceholder>
+class _PlantModel3DState extends State<PlantModel3D>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  Object? _plant;
+  Scene? _scene;
 
   @override
   void initState() {
     super.initState();
-    // Rotazione lenta, giusto per dare l'idea
+
+    // Rotazione lenta: un giro ogni 40 secondi
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 20),
-    )..repeat();
+      duration: const Duration(seconds: 40),
+    )
+      ..addListener(_onTick)
+      ..repeat();
+  }
+
+  void _onTick() {
+    if (_plant == null || _scene == null) return;
+
+    final angle = _controller.value * 360.0;
+
+    // NESSUNA inclinazione sull'asse X, solo rotazione attorno alla Y
+    _plant!.rotation.setValues(0, angle, 0);
+
+    _plant!.updateTransform();
+    _scene!.update();
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onTick);
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (_, child) {
-        return Transform.rotate(
-          angle: _controller.value * 6.28318, // 2*pi
-          child: child,
+    return Cube(
+      interactive: false, // niente rotazione col dito, solo la nostra animazione
+      onSceneCreated: (Scene scene) {
+        _scene = scene;
+
+        _plant = Object(
+          fileName: 'assets/models/plant_clean.obj', // il nome che stai usando ora
         );
+
+        // Ingrandiamo un po' il modello (gioca con questo valore se serve)
+        _plant!.scale.setValues(6, 6, 6);
+
+        // Se la base è il pivot, lo abbassiamo leggermente per centrarlo nella card
+        _plant!.position.setValues(0, -0.5, 0);
+
+        scene.world.add(_plant!);
+
+        // Luce da davanti-alto
+        scene.light.position.setFrom(Vector3(0, 3, 4));
+
+        // Camera: leggermente dall'alto, abbastanza vicina
+        scene.camera.position.setFrom(Vector3(0, 1.8, 3.5));
+        scene.camera.target.setFrom(Vector3(0, 0.5, 0));
+
+        // Zoom moderato (puoi provare 1, 2, 4, ecc. per trovare quello giusto)
+        scene.camera.zoom = 1;
+
+        _plant!.updateTransform();
+        scene.update();
       },
-      child: Container(
-        margin: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: Colors.greenAccent.withOpacity(0.4)),
-        ),
-        child: Center(
-          child: Icon(
-            Icons.eco,
-            size: 96,
-            color: Colors.greenAccent.withOpacity(0.9),
-          ),
-        ),
-      ),
     );
   }
 }
 
+
+//
 // Riga singolo sensore: titolo + valore + mini grafico
+//
 class SensorRow extends StatelessWidget {
   final String label;
   final String unit;
@@ -413,7 +445,9 @@ class SensorRow extends StatelessWidget {
   }
 }
 
+//
 // Mini grafico linea con fl_chart
+//
 class SensorChart extends StatelessWidget {
   final List<SensorSample> history;
 
@@ -464,7 +498,9 @@ class SensorChart extends StatelessWidget {
   }
 }
 
+//
 // Pagina Profilo (per ora solo placeholder)
+//
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
@@ -488,7 +524,9 @@ class ProfilePage extends StatelessWidget {
   }
 }
 
+//
 // Pagina Comandi (per ora solo placeholder)
+//
 class CommandsPage extends StatelessWidget {
   const CommandsPage({super.key});
 
@@ -512,4 +550,3 @@ class CommandsPage extends StatelessWidget {
     );
   }
 }
-

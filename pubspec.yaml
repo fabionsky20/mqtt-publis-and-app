@@ -34,6 +34,7 @@ dependencies:
   mqtt_client: ^9.6.8
   fl_chart: ^0.69.0
   flutter_cube: ^0.1.0
+  shared_preferences: ^2.2.2
 
 
   # The following adds the Cupertino Icons font to your application.
@@ -61,6 +62,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/models/model1
+    - assets/models/model2
 
   # To add assets to your application, add an assets section, like this:
   # assets:
